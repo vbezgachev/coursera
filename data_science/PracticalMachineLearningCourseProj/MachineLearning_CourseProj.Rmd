@@ -1,0 +1,118 @@
+Practical Machine Learning course project. Prediction of the exercise execution manner
+==========================================================================
+
+
+## Synopsis
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible 
+to collect a large amount of data about personal activity.  
+These type of devices are part of the quantified self movement. One thing that 
+people regularly do is quantify how much of a particular activity they do, but 
+they rarely quantify how well they do it.  
+6 participants were asked to perform barbell lifts correctly and incorrectly 
+in 5 different ways. The goal of the project - using the data from accelerometers 
+on the belt, forearm, arm, and dumbbell predict, how well an exercise was doing.
+More information is available [here](http://groupware.les.inf.puc-rio.br/har) 
+(Weight Lifting Exercises Dataset section).
+
+
+## Input data and their processing
+### Read data
+The training data for this project have been downloaded locally from 
+[here](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv).  
+We're using the training data to train and test the model.  
+The data set contain timestamps, user names, time window id and indication, 
+sensor measurements and prediction class.  
+```{r, echo=TRUE}
+library(caret)
+data <- read.csv('pml-training.csv', na.strings = c("NA", "NaN", "", " ", "#DIV/0!"))
+```
+### Data clean-up
+Inspecting training and [test data](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv)
+we see, there are variables (e.g. "kurtosis_...", "max_...", "min_...", "amplitude_...")
+that were calculated at the end of the time window only. We'll not consider them 
+since they appear relatively rare and do not appear in the test data set. 
+We'll use only sensor measurements (columns 8 - 159) and only data rows that do
+not have NAs
+```{r, echo=TRUE}
+temp <- data[,8:160] # use columns with measurements only
+data <- temp[, colSums(!is.na(temp)) == nrow(temp)] #remove columns with NAs
+```
+Following columns remain:
+```{r, echo=FALSE}
+colnames(data)
+```
+### Slicing data
+60% of the data are used for the training, 20% are used for model selection
+and 20% will be testing data.
+
+```{r, echo=TRUE}
+set.seed(12123) #to reproduce the results
+train_idx <- createDataPartition(y = data$classe, p = 0.6, list = FALSE)
+training <- data[train_idx,]
+temp <- data[-train_idx,]
+temp_idx <- createDataPartition(y = temp$classe, p = 0.5, list = FALSE)
+testing <- temp[temp_idx,]
+tuning <- temp[-temp_idx,]
+```
+
+
+## Model selection
+Using our training data we evaluate random forest and boosting with tree.  
+The default re-sampling scheme is the bootstrap. Instead we're using 10-fold 
+cross validation.
+```{r, echo=TRUE}
+train_ctrl <- trainControl(method = "cv", number = 10)
+```
+We're using random forest with default settings.
+```{r, echo=TRUE}
+rf_mod <- train(classe~., data = training, method = "rf", 
+                trControl = train_ctrl, importance = TRUE,
+                ntree = 500)
+```
+For the boosting model we tune the number of trees (i.e. boosting interaction) 
+and the complexity of trees (interaction.depth)
+```{r, echo=TRUE}
+gbmGrid <- expand.grid(.interaction.depth = 5,
+                       .n.trees = 250, .shrinkage = .1)
+gbm_mod <- train(classe~., data = training, method = "gbm",
+                 trControl = train_ctrl, tuneGrid = gbmGrid,
+                 verbose = FALSE)
+```
+We run the prediction on the tuning data to select the model
+```{r, echo=TRUE}
+rf_predict <- predict(rf_mod, tuning)
+gbm_predict <- predict(gbm_mod, tuning)
+```
+Checking the confusion matrix on prediction...  
+...for random forest
+```{r, echo=FALSE}
+confusionMatrix(tuning$classe, rf_predict)
+```
+... and for boosting
+```{r, echo=FALSE}
+confusionMatrix(tuning$classe, gbm_predict)
+```
+we see that the results are comparable. 
+As a final model the **random forest** is selected mainly because it required less 
+resources by learning and it is easier to interpret.  
+
+
+## Summary
+Running the selected model on the dedicated test data...
+```{r, echo=TRUE}
+rf_predict_test <- predict(rf_mod, testing)
+```
+... and inspecting the confusion matrix (especially accuracy and confidence
+interval)
+```{r, echo=FALSE}
+confusionMatrix(testing$classe, rf_predict_test)
+```
+I would expect the out of sample error about 10%. Means I would expect 90% 
+accuracy for the model for not-known-yet data.
+
+Checking the variable importance chart 
+```{r, echo=FALSE, fig.align='center', fig.height=9, fig.width=8}
+varImpPlot(rf_mod$final)
+```
+we see that the most important variables for the model are roll_belt, yaw_belt,
+pitch_forearm, magnet_dumbbell_y, pitch_belt, magnet_dumbbelt and roll_forearm.
